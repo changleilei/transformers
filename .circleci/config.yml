@@ -9,6 +9,19 @@ parameters:
         default: false
 
 jobs:
+    # Ensure running with CircleCI/huggingface
+    check_circleci_user:
+        docker:
+            - image: cimg/python:3.7.12
+        parallelism: 1
+        steps:
+            - run: echo $CIRCLE_PROJECT_USERNAME
+            - run: |
+                if [ "$CIRCLE_PROJECT_USERNAME" = "huggingface" ]; then
+                    exit 0
+                else
+                    echo "The CI is running under $CIRCLE_PROJECT_USERNAME personal account. Please follow https://support.circleci.com/hc/en-us/articles/360008097173-Troubleshooting-why-pull-requests-are-not-triggering-jobs-on-my-organization- to fix it."; exit -1
+                fi
     # Fetch the tests to run
     fetch_tests:
         working_directory: ~/transformers
@@ -77,14 +90,17 @@ jobs:
         steps:
             - checkout
             - run: pip install --upgrade pip
+            - run: pip install GitPython
             - run: pip install .
             - run: |
                   mkdir test_preparation
-                  echo "tests" > test_preparation/test_list.txt
-                  echo "tests" > test_preparation/examples_test_list.txt
-            - run: python utils/tests_fetcher.py --filter_tests
-            - run: mv test_list.txt test_preparation/filtered_test_list.txt
-            - run: mv test_repo_utils.txt test_preparation/test_repo_utils.txt
+                  echo -n "tests" > test_preparation/test_list.txt
+                  echo -n "tests" > test_preparation/examples_test_list.txt
+                  echo -n "tests/repo_utils" > test_preparation/test_repo_utils.txt
+            - run: |
+                  echo -n "tests" > test_list.txt
+                  python utils/tests_fetcher.py --filter_tests
+                  mv test_list.txt test_preparation/filtered_test_list.txt
             - run: python .circleci/create_circleci_config.py --fetcher_folder test_preparation
             - run: cp test_preparation/generated_config.yml test_preparation/generated_config.txt
             - store_artifacts:
@@ -113,6 +129,11 @@ jobs:
                   key: v0.5-code_quality-{{ checksum "setup.py" }}
                   paths:
                       - '~/.cache/pip'
+            - run:
+                name: Show installed libraries and their versions
+                command: pip freeze | tee installed.txt
+            - store_artifacts:
+                  path: ~/transformers/installed.txt
             - run: black --check --preview examples tests src utils
             - run: isort --check-only examples tests src utils
             - run: python utils/custom_init_isort.py --check_only
@@ -142,15 +163,22 @@ jobs:
                   key: v0.5-repository_consistency-{{ checksum "setup.py" }}
                   paths:
                       - '~/.cache/pip'
+            - run:
+                name: Show installed libraries and their versions
+                command: pip freeze | tee installed.txt
+            - store_artifacts:
+                  path: ~/transformers/installed.txt
             - run: python utils/check_copies.py
             - run: python utils/check_table.py
             - run: python utils/check_dummies.py
             - run: python utils/check_repo.py
             - run: python utils/check_inits.py
             - run: python utils/check_config_docstrings.py
+            - run: python utils/check_doctest_list.py
             - run: make deps_table_check_updated
             - run: python utils/tests_fetcher.py --sanity_check
             - run: python utils/update_metadata.py --check-only
+            - run: python utils/check_task_guides.py
 
 workflows:
     version: 2
@@ -158,6 +186,7 @@ workflows:
         when:
             not: <<pipeline.parameters.nightly>>
         jobs:
+            - check_circleci_user
             - check_code_quality
             - check_repository_consistency
             - fetch_tests
@@ -165,6 +194,7 @@ workflows:
     nightly:
         when: <<pipeline.parameters.nightly>>
         jobs:
+            - check_circleci_user
             - check_code_quality
             - check_repository_consistency
             - fetch_all_tests

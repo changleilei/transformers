@@ -385,14 +385,18 @@ def main():
             logger.info("Training new model from scratch")
             model = TFAutoModelForTokenClassification.from_config(config)
 
-        model.resize_token_embeddings(len(tokenizer))
+        # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
+        # on a small vocab and want a smaller embedding size, remove this test.
+        embedding_size = model.get_input_embeddings().weight.shape[0]
+        if len(tokenizer) > embedding_size:
+            model.resize_token_embeddings(len(tokenizer))
         # endregion
 
         # region Create TF datasets
 
         # We need the DataCollatorForTokenClassification here, as we need to correctly pad labels as
         # well as inputs.
-        collate_fn = DataCollatorForTokenClassification(tokenizer=tokenizer, return_tensors="tf")
+        collate_fn = DataCollatorForTokenClassification(tokenizer=tokenizer, return_tensors="np")
         num_replicas = training_args.strategy.num_replicas_in_sync
         total_train_batch_size = training_args.per_device_train_batch_size * num_replicas
 

@@ -489,13 +489,17 @@ def main():
             logger.info("Training new model from scratch")
             model = TFAutoModelForMaskedLM.from_config(config)
 
-        model.resize_token_embeddings(len(tokenizer))
+        # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
+        # on a small vocab and want a smaller embedding size, remove this test.
+        embedding_size = model.get_input_embeddings().weight.shape[0]
+        if len(tokenizer) > embedding_size:
+            model.resize_token_embeddings(len(tokenizer))
         # endregion
 
         # region TF Dataset preparation
         num_replicas = training_args.strategy.num_replicas_in_sync
         data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer, mlm_probability=data_args.mlm_probability, return_tensors="tf"
+            tokenizer=tokenizer, mlm_probability=data_args.mlm_probability, return_tensors="np"
         )
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF

@@ -164,7 +164,7 @@ If you can't find a model for your use-case, you'll need to finetune a pretraine
 
 <Youtube id="AhChOFRegn4"/>
 
-Under the hood, the [`AutoModelForSequenceClassification`] and [`AutoTokenizer`] classes work together to power the [`pipeline`] you used above. An [AutoClass](./model_doc/auto) is a shortcut that automatically retrieves the architecture of a pretrained model from it's name or path. You only need to select the appropriate `AutoClass` for your task and it's associated preprocessing class. 
+Under the hood, the [`AutoModelForSequenceClassification`] and [`AutoTokenizer`] classes work together to power the [`pipeline`] you used above. An [AutoClass](./model_doc/auto) is a shortcut that automatically retrieves the architecture of a pretrained model from its name or path. You only need to select the appropriate `AutoClass` for your task and it's associated preprocessing class. 
 
 Let's return to the example from the previous section and see how you can use the `AutoClass` to replicate the results of the [`pipeline`].
 
@@ -225,7 +225,7 @@ A tokenizer can also accept a list of inputs, and pad and truncate the text to r
 
 <Tip>
 
-Check out the [preprocess](./preprocessing) tutorial for more details about tokenization, and how to use an [`AutoFeatureExtractor`] and [`AutoProcessor`] to preprocess image, audio, and multimodal inputs.
+Check out the [preprocess](./preprocessing) tutorial for more details about tokenization, and how to use an [`AutoImageProcessor`], [`AutoFeatureExtractor`] and [`AutoProcessor`] to preprocess image, audio, and multimodal inputs.
 
 </Tip>
 
@@ -424,7 +424,7 @@ Depending on your task, you'll typically pass the following parameters to [`Trai
    ... )
    ```
 
-3. A preprocessing class like a tokenizer, feature extractor, or processor:
+3. A preprocessing class like a tokenizer, image processor, feature extractor, or processor:
 
    ```py
    >>> from transformers import AutoTokenizer
@@ -432,19 +432,33 @@ Depending on your task, you'll typically pass the following parameters to [`Trai
    >>> tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
    ```
 
-4. Your preprocessed train and test datasets:
+4. Load a dataset:
 
    ```py
-   >>> train_dataset = dataset["train"]  # doctest: +SKIP
-   >>> eval_dataset = dataset["eval"]  # doctest: +SKIP
+   >>> from datasets import load_dataset
+
+   >>> dataset = load_dataset("rotten_tomatoes")  # doctest: +IGNORE_RESULT
    ```
 
-5. A [`DataCollator`] to create a batch of examples from your dataset:
+5. Create a function to tokenize the dataset:
 
    ```py
-   >>> from transformers import DefaultDataCollator
+   >>> def tokenize_dataset(dataset):
+   ...     return tokenizer(dataset["text"])
+   ```
 
-   >>> data_collator = DefaultDataCollator()
+   Then apply it over the entire dataset with [`~datasets.Dataset.map`]:
+
+   ```py
+   >>> dataset = dataset.map(tokenize_dataset, batched=True)
+   ```
+
+6. A [`DataCollatorWithPadding`] to create a batch of examples from your dataset:
+
+   ```py
+   >>> from transformers import DataCollatorWithPadding
+
+   >>> data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
    ```
 
 Now gather all these classes in [`Trainer`]:
@@ -490,7 +504,7 @@ All models are a standard [`tf.keras.Model`](https://www.tensorflow.org/api_docs
    >>> model = TFAutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased")
    ```
 
-2. A preprocessing class like a tokenizer, feature extractor, or processor:
+2. A preprocessing class like a tokenizer, image processor, feature extractor, or processor:
 
    ```py
    >>> from transformers import AutoTokenizer

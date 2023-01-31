@@ -346,7 +346,7 @@ class PreTrainedTokenizerFast(PreTrainedTokenizerBase):
                 The stride to use when handling overflow.
             pad_to_multiple_of (`int`, *optional*):
                 If set will pad the sequence to a multiple of the provided value. This is especially useful to enable
-                the use of Tensor Cores on NVIDIA hardware with compute capability >= 7.5 (Volta).
+                the use of Tensor Cores on NVIDIA hardware with compute capability `>= 7.5` (Volta).
         """
         _truncation = self._tokenizer.truncation
         _padding = self._tokenizer.padding
@@ -412,8 +412,10 @@ class PreTrainedTokenizerFast(PreTrainedTokenizerBase):
         verbose: bool = True,
     ) -> BatchEncoding:
 
-        if not isinstance(batch_text_or_text_pairs, list):
-            raise TypeError(f"batch_text_or_text_pairs has to be a list (got {type(batch_text_or_text_pairs)})")
+        if not isinstance(batch_text_or_text_pairs, (tuple, list)):
+            raise TypeError(
+                f"batch_text_or_text_pairs has to be a list or a tuple (got {type(batch_text_or_text_pairs)})"
+            )
 
         # Set the truncation and padding strategy and restore the initial configuration
         self.set_truncation_and_padding(

@@ -33,7 +33,7 @@ from jax.random import PRNGKey
 
 from .configuration_utils import PretrainedConfig
 from .dynamic_module_utils import custom_object_save
-from .generation_flax_utils import FlaxGenerationMixin
+from .generation import FlaxGenerationMixin, GenerationConfig
 from .modeling_flax_pytorch_utils import load_pytorch_checkpoint_in_flax_state_dict
 from .utils import (
     FLAX_WEIGHTS_INDEX_NAME,
@@ -199,6 +199,7 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
         self.key = PRNGKey(seed)
         self.dtype = dtype
         self.input_shape = input_shape
+        self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
         # To check if the model was intialized automatically.
         self._is_initialized = _do_init
@@ -467,6 +468,16 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
         # the state dict is unflattened to the match the format of model.params
         return unflatten_dict(state_sharded_dict, sep="/")
 
+    def can_generate(self) -> bool:
+        """
+        Returns whether this model can generate sequences with `.generate()`. Returns:
+            `bool`: Whether this model can generate sequences with `.generate()`.
+        """
+        # Detects whether `prepare_inputs_for_generation` has been overwritten, which is a requirement for generation
+        if "GenerationMixin" in str(self.prepare_inputs_for_generation):
+            return False
+        return True
+
     @classmethod
     def from_pretrained(
         cls,
@@ -547,10 +558,21 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
                 'http://hostname': 'foo.bar:4012'}`. The proxies are used on each request.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            use_auth_token (`str` or `bool`, *optional*):
+                The token to use as HTTP bearer authorization for remote files. If `True`, or not specified, will use
+                the token generated when running `huggingface-cli login` (stored in `~/.huggingface`).
             revision (`str`, *optional*, defaults to `"main"`):
                 The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
                 git-based system for storing models and other artifacts on huggingface.co, so `revision` can be any
                 identifier allowed by git.
+
+
+                <Tip>
+
+                To test a pull request you made on the Hub, you can pass `revision="refs/pr/<pr_number>".
+
+                </Tip>
+
             subfolder (`str`, *optional*, defaults to `""`):
                 In case the relevant files are located inside a subfolder of the model repo on huggingface.co, you can
                 specify the folder name here.
@@ -625,6 +647,7 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
                 local_files_only=local_files_only,
                 use_auth_token=use_auth_token,
                 revision=revision,
+                subfolder=subfolder,
                 _from_auto=from_auto_class,
                 _from_pipeline=from_pipeline,
                 _commit_hash=commit_hash,
@@ -648,22 +671,24 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
             pretrained_model_name_or_path = str(pretrained_model_name_or_path)
             is_local = os.path.isdir(pretrained_model_name_or_path)
             if os.path.isdir(pretrained_model_name_or_path):
-                if from_pt and os.path.isfile(os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)):
+                if from_pt and os.path.isfile(os.path.join(pretrained_model_name_or_path, subfolder, WEIGHTS_NAME)):
                     # Load from a PyTorch checkpoint
-                    archive_file = os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)
-                elif from_pt and os.path.isfile(os.path.join(pretrained_model_name_or_path, WEIGHTS_INDEX_NAME)):
+                    archive_file = os.path.join(pretrained_model_name_or_path, subfolder, WEIGHTS_NAME)
+                elif from_pt and os.path.isfile(
+                    os.path.join(pretrained_model_name_or_path, subfolder, WEIGHTS_INDEX_NAME)
+                ):
                     # Load from a sharded pytorch checkpoint
-                    archive_file = os.path.join(pretrained_model_name_or_path, WEIGHTS_INDEX_NAME)
+                    archive_file = os.path.join(pretrained_model_name_or_path, subfolder, WEIGHTS_INDEX_NAME)
                     is_sharded = True
-                elif os.path.isfile(os.path.join(pretrained_model_name_or_path, FLAX_WEIGHTS_NAME)):
+                elif os.path.isfile(os.path.join(pretrained_model_name_or_path, subfolder, FLAX_WEIGHTS_NAME)):
                     # Load from a Flax checkpoint
-                    archive_file = os.path.join(pretrained_model_name_or_path, FLAX_WEIGHTS_NAME)
-                elif os.path.isfile(os.path.join(pretrained_model_name_or_path, FLAX_WEIGHTS_INDEX_NAME)):
+                    archive_file = os.path.join(pretrained_model_name_or_path, subfolder, FLAX_WEIGHTS_NAME)
+                elif os.path.isfile(os.path.join(pretrained_model_name_or_path, subfolder, FLAX_WEIGHTS_INDEX_NAME)):
                     # Load from a sharded Flax checkpoint
-                    archive_file = os.path.join(pretrained_model_name_or_path, FLAX_WEIGHTS_INDEX_NAME)
+                    archive_file = os.path.join(pretrained_model_name_or_path, subfolder, FLAX_WEIGHTS_INDEX_NAME)
                     is_sharded = True
                 # At this stage we don't have a weight file so we will raise an error.
-                elif os.path.isfile(os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)):
+                elif os.path.isfile(os.path.join(pretrained_model_name_or_path, subfolder, WEIGHTS_NAME)):
                     raise EnvironmentError(
                         f"Error no file named {FLAX_WEIGHTS_NAME} found in directory {pretrained_model_name_or_path} "
                         "but there is a file for PyTorch weights. Use `from_pt=True` to load this model from those "
@@ -674,7 +699,7 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
                         f"Error no file named {FLAX_WEIGHTS_NAME} or {WEIGHTS_NAME} found in directory "
                         f"{pretrained_model_name_or_path}."
                     )
-            elif os.path.isfile(pretrained_model_name_or_path):
+            elif os.path.isfile(os.path.join(subfolder, pretrained_model_name_or_path)):
                 archive_file = pretrained_model_name_or_path
                 is_local = True
             elif is_remote_url(pretrained_model_name_or_path):
@@ -775,6 +800,7 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
                 use_auth_token=use_auth_token,
                 user_agent=user_agent,
                 revision=revision,
+                subfolder=subfolder,
                 _commit_hash=commit_hash,
             )
 
@@ -925,6 +951,29 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
                 "See [`~FlaxPreTrainedModel.to_fp32`] for further information on how to do this."
             )
 
+        # If it is a model with generation capabilities, attempt to load the generation config
+        if model.can_generate():
+            try:
+                model.generation_config = GenerationConfig.from_pretrained(
+                    pretrained_model_name_or_path,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    proxies=proxies,
+                    local_files_only=local_files_only,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    subfolder=subfolder,
+                    _from_auto=from_auto_class,
+                    _from_pipeline=from_pipeline,
+                    **kwargs,
+                )
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
+                pass
+
         if _do_init:
             # set correct parameters
             model.params = unflatten_dict(state)
@@ -969,7 +1018,7 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
         if push_to_hub:
             commit_message = kwargs.pop("commit_message", None)
             repo_id = kwargs.pop("repo_id", save_directory.split(os.path.sep)[-1])
-            repo_id, token = self._create_repo(repo_id, **kwargs)
+            repo_id = self._create_repo(repo_id, **kwargs)
             files_timestamps = self._get_files_timestamps(save_directory)
 
         # get abs dir
@@ -983,6 +1032,8 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
             custom_object_save(self, save_directory, config=self.config)
 
         self.config.save_pretrained(save_directory)
+        if self.can_generate():
+            self.generation_config.save_pretrained(save_directory)
 
         # save model
         output_model_file = os.path.join(save_directory, FLAX_WEIGHTS_NAME)
@@ -1026,7 +1077,11 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
 
         if push_to_hub:
             self._upload_modified_files(
-                save_directory, repo_id, files_timestamps, commit_message=commit_message, token=token
+                save_directory,
+                repo_id,
+                files_timestamps,
+                commit_message=commit_message,
+                token=kwargs.get("use_auth_token"),
             )
 
     @classmethod
@@ -1058,9 +1113,10 @@ class FlaxPreTrainedModel(PushToHubMixin, FlaxGenerationMixin):
 
 # To update the docstring, we need to copy the method, otherwise we change the original docstring.
 FlaxPreTrainedModel.push_to_hub = copy_func(FlaxPreTrainedModel.push_to_hub)
-FlaxPreTrainedModel.push_to_hub.__doc__ = FlaxPreTrainedModel.push_to_hub.__doc__.format(
-    object="model", object_class="FlaxAutoModel", object_files="model checkpoint"
-)
+if FlaxPreTrainedModel.push_to_hub.__doc__ is not None:
+    FlaxPreTrainedModel.push_to_hub.__doc__ = FlaxPreTrainedModel.push_to_hub.__doc__.format(
+        object="model", object_class="FlaxAutoModel", object_files="model checkpoint"
+    )
 
 
 def overwrite_call_docstring(model_class, docstring):
@@ -1072,10 +1128,9 @@ def overwrite_call_docstring(model_class, docstring):
     model_class.__call__ = add_start_docstrings_to_model_forward(docstring)(model_class.__call__)
 
 
-def append_call_sample_docstring(model_class, tokenizer_class, checkpoint, output_type, config_class, mask=None):
+def append_call_sample_docstring(model_class, checkpoint, output_type, config_class, mask=None):
     model_class.__call__ = copy_func(model_class.__call__)
     model_class.__call__ = add_code_sample_docstrings(
-        processor_class=tokenizer_class,
         checkpoint=checkpoint,
         output_type=output_type,
         config_class=config_class,

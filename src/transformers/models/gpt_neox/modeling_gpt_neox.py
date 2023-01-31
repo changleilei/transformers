@@ -36,9 +36,9 @@ from .configuration_gpt_neox import GPTNeoXConfig
 
 logger = logging.get_logger(__name__)
 
-_CHECKPOINT_FOR_DOC = "gpt-neox-20b"
+_CHECKPOINT_FOR_DOC = "trl-internal-testing/tiny-random-GPTNeoXForCausalLM"
+_REAL_CHECKPOINT_FOR_DOC = "EleutherAI/gpt-neox-20b"
 _CONFIG_FOR_DOC = "GPTNeoXConfig"
-_TOKENIZER_FOR_DOC = "GPTNeoXTokenizerFast"
 
 GPT_NEOX_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "EleutherAI/gpt-neox-20b",
@@ -364,7 +364,7 @@ GPT_NEOX_INPUTS_DOCSTRING = r"""
         input_ids (`torch.LongTensor` of shape `({0})`):
             Indices of input sequence tokens in the vocabulary.
 
-            Indices can be obtained using [`GPTNeoXTokenizerFast`]. See [`PreTrainedTokenizer.encode`] and
+            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
             [`PreTrainedTokenizer.__call__`] for details.
 
             [What are input IDs?](../glossary#input-ids)
@@ -422,6 +422,8 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
         self.layers = nn.ModuleList([GPTNeoXLayer(config) for _ in range(config.num_hidden_layers)])
         self.final_layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
+        self.gradient_checkpointing = False
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -433,8 +435,8 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(GPT_NEOX_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        processor_class=_TOKENIZER_FOR_DOC,
         checkpoint=_CHECKPOINT_FOR_DOC,
+        real_checkpoint=_REAL_CHECKPOINT_FOR_DOC,
         output_type=BaseModelOutputWithPast,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -518,14 +520,37 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
         for i, (layer, layer_past) in enumerate(zip(self.layers, past_key_values)):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
-            outputs = layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                head_mask=head_mask[i],
-                layer_past=layer_past,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-            )
+
+            if self.gradient_checkpointing and self.training:
+
+                if use_cache:
+                    logger.warning(
+                        "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
+                    )
+                    use_cache = False
+
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        # None for layer_past
+                        return module(*inputs, use_cache, None, output_attentions)
+
+                    return custom_forward
+
+                outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer),
+                    hidden_states,
+                    attention_mask,
+                    head_mask[i],
+                )
+            else:
+                outputs = layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    head_mask=head_mask[i],
+                    layer_past=layer_past,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                )
             hidden_states = outputs[0]
             if use_cache is True:
                 presents = presents + (outputs[1],)
@@ -611,10 +636,10 @@ class GPTNeoXForCausalLM(GPTNeoXPreTrainedModel):
         Example:
 
         ```python
-        >>> from transformers import GPTNeoXTokenizerFast, GPTNeoXForCausalLM, GPTNeoXConfig
+        >>> from transformers import AutoTokenizer, GPTNeoXForCausalLM, GPTNeoXConfig
         >>> import torch
 
-        >>> tokenizer = GPTNeoXTokenizerFast.from_pretrained("EleutherAI/gpt-neox-20b")
+        >>> tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
         >>> config = GPTNeoXConfig.from_pretrained("EleutherAI/gpt-neox-20b")
         >>> config.is_decoder = True
         >>> model = GPTNeoXForCausalLM.from_pretrained("EleutherAI/gpt-neox-20b", config=config)
@@ -661,7 +686,7 @@ class GPTNeoXForCausalLM(GPTNeoXPreTrainedModel):
             attentions=outputs.attentions,
         )
 
-    def prepare_inputs_for_generation(self, input_ids, past=None, attention_mask=None, **model_kwargs):
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, attention_mask=None, **model_kwargs):
         input_shape = input_ids.shape
 
         # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
@@ -669,10 +694,14 @@ class GPTNeoXForCausalLM(GPTNeoXPreTrainedModel):
             attention_mask = input_ids.new_ones(input_shape)
 
         # cut decoder_input_ids if past is used
-        if past and past[0] is not None:
+        if past_key_values and past_key_values[0] is not None:
             input_ids = input_ids[:, -1:]
 
-        return {"input_ids": input_ids, "attention_mask": attention_mask, "past_key_values": past}
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "past_key_values": past_key_values,
+        }
 
     def _reorder_cache(self, past, beam_idx):
         reordered_past = ()
